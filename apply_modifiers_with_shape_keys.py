@@ -24,7 +24,13 @@ Created by Wayne Dixon
 import bpy
 
 # Local imports
-from .functions import apply_modifiers_with_shape_keys
+from .functions import apply_modifiers_with_shape_keys, resolve_method
+
+
+METHOD_LABELS = {
+    'REAPPLY': "Re-apply Per Shape",
+    'INTERPOLATE': "Interpolate Offsets",
+}
 
 
 # Property Collection
@@ -41,6 +47,25 @@ class OBJECT_OT_apply_modifiers_with_shape_keys(bpy.types.Operator):
 
     collection_property: bpy.props.CollectionProperty(type=ModifierList)
 
+    method: bpy.props.EnumProperty(
+        name="Method",
+        description="How the shape keys are carried through the modifier(s)",
+        items=[
+            ('AUTO', "Auto",
+             "Use Interpolate Offsets for modifiers whose result depends on the vertex positions "
+             "(Decimate, Weld, Remesh, Boolean, Volume to Mesh) and Re-apply Per Shape for everything else"),
+            ('REAPPLY', "Re-apply Per Shape",
+             "Evaluate the modifier(s) once per shape key with that shape pinned and join the results back "
+             "in by vertex index. Correct when the resulting topology is the same for every shape "
+             "(Mirror, Array, Subdivision)"),
+            ('INTERPOLATE', "Interpolate Offsets",
+             "Carry each shape key offset through the modifier(s) as a mesh attribute and evaluate only once, "
+             "so the offsets are interpolated exactly like UVs and vertex weights. Required when the "
+             "resulting topology depends on the vertex positions (Decimate, Weld, Remesh, Boolean)"),
+        ],
+        default='AUTO',
+    )
+
     @classmethod
     def poll(cls, context):
         active_object = context.active_object
@@ -54,20 +79,27 @@ class OBJECT_OT_apply_modifiers_with_shape_keys(bpy.types.Operator):
             self.report({'ERROR'}, 'No modifiers selected!')
             return {'FINISHED'}
 
+        method = resolve_method(context.object, selected_modifiers, self.method)
+
         success, error_info = apply_modifiers_with_shape_keys(
-            context, selected_modifiers)
+            context, selected_modifiers, method=method)
         if not success:
             self.report({'ERROR'}, error_info)
+        else:
+            self.report({'INFO'},
+                        f"Applied {len(selected_modifiers)} modifier(s) using the "
+                        f"'{METHOD_LABELS.get(method, method)}' method")
 
         return {'FINISHED'}
 
     def draw(self, context):
-        show_armature_option = False
         self.layout.label(text="Select which modifier(s) to apply")
         box = self.layout.box()
 
         for prop in self.collection_property:
             box.prop(prop, "apply_modifier", text=prop.name)
+
+        self.layout.prop(self, "method")
 
     def invoke(self, context, event):
         self.collection_property.clear()

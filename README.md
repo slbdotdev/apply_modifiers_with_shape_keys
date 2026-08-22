@@ -1,5 +1,11 @@
 # Apply Modifiers to Mesh with Shape Keys
 
+> **This is a fork** of [CGCookie/apply_modifiers_with_shape_keys](https://github.com/CGCookie/apply_modifiers_with_shape_keys).
+> It adds a second **Interpolate Offsets** method so that modifiers whose result depends on the
+> vertex positions (Decimate, Weld, Remesh, Boolean, Volume to Mesh) can be applied at all, and
+> fixes several ways the original could silently mislabel or empty out shape keys. See
+> [Methods](#methods) below.
+
 This is a Blender add-on that applies any modifiers to a mesh that has shape keys. It will apply any of the modifiers you select, restore all the settings, drivers, and any animation data on the shapes.
 
 If you run into the problem below, this add-on will let you apply that modifier.  
@@ -50,7 +56,49 @@ After activating the tool you will see a popup dialog box.
 Chose which modifiers to apply and click OK
 
 
+## Methods
+
+The dialog has a **Method** dropdown underneath the modifier checkboxes.
+
+### Auto (default)
+
+Picks **Interpolate Offsets** if *any* of the modifiers you ticked is one whose output topology
+depends on where the vertices are — `DECIMATE`, `WELD`, `REMESH`, `BOOLEAN`, `VOLUME_TO_MESH` —
+and **Re-apply Per Shape** otherwise.
+
+### Re-apply Per Shape
+
+The original behaviour. The modifiers are evaluated once per shape key with that shape pinned, and
+each result is joined back in by vertex index.
+
+This is the right choice whenever the modifier changes the topology *the same way for every shape*:
+Mirror, Array, Subdivision Surface, Solidify, and so on. It is exact — every shape goes through the
+modifier itself.
+
+It cannot work when the resulting vertex count or vertex order differs between shapes. When that
+happens the add-on now reports every shape that failed in one message and keeps those shapes (as
+copies of the basis) so the names, the order, and anything referring to them by index stay correct.
+
+### Interpolate Offsets
+
+Each shape key's offset from the basis is written to the mesh as a temporary `FLOAT_VECTOR` point
+attribute, the modifiers are evaluated **once** on the basis geometry, and the offsets come out the
+other side interpolated in exactly the same way UVs and vertex weights are. The shape keys are then
+rebuilt from the new basis plus those interpolated offsets, and the temporary attributes are removed.
+
+This is the only approach that works for Decimate, Weld, Remesh and Boolean, and it is also much
+faster on meshes with many shape keys, because the stack is evaluated once instead of once per shape.
+
+**Known limitation:** the offsets travel as raw vectors, so they are moved and welded with the mesh
+but they are never *transformed*. A modifier in the same selection that mirrors, rotates or
+instances geometry (Mirror, Array with an object offset, Screw) would place correct geometry but
+leave the offsets on the copies unmirrored/unrotated. Apply those separately — and first — with the
+**Re-apply Per Shape** method, then apply the geometry-dependent one with **Interpolate Offsets**.
+
+
 ## How it Functions
+
+### Re-apply Per Shape
 
 1. **Duplicate Mesh**:  
     - The add-on creates a duplicate of the original mesh, removes all the shape keys, and applies the selected modifier(s) by evaluating the mesh and swapping it out (it avoids using the apply modifiers operator).
@@ -66,11 +114,24 @@ Chose which modifiers to apply and click OK
 
 This process is done one shape key at a time to reduce the memory load on your machine, which is important if you're working with a high-density mesh and a lot of shape keys.
 
+### Interpolate Offsets
+
+1. **Bake the offsets**:
+    - Every shape key's offset from the reference (Basis) key is stored on the mesh as a temporary `FLOAT_VECTOR` point attribute.
+
+2. **Evaluate once**:
+    - The reference key is pinned, the unselected modifiers are switched off, and the mesh is evaluated a single time. The attributes are carried through and interpolated by the modifiers along with the UVs and the vertex weights.
+
+3. **Rebuild the shape keys**:
+    - The shape keys are recreated on the new mesh, in the original order and with the original names, each one set to the new basis position plus its interpolated offset. The temporary attributes are then deleted and the settings, drivers and animation data are restored.
+
 ## Troubleshooting
 
 Theoretically, if you can apply the modifiers to the base shape, and all your shape keys and the resulting meshes have the same number of vertices, the add-on will work with any modifier.
 
 However, as you may know, several Blender modifiers can change the number of vertices on the base mesh (e.g. Subdivision Surface, Mirror modifier with Bisect or Merge enabled, Geometry Nodes, etc.). This can cause problems because Blender can only join meshes with shape keys if they have the same number of vertices.
+
+If the vertex count comes out *different for different shapes*, no amount of reordering will help — switch the **Method** to **Interpolate Offsets** instead (Auto already does this for Decimate, Weld, Remesh, Boolean and Volume to Mesh).
 
 ### What to Do If the Add-on Doesn't Work as Expected
 
